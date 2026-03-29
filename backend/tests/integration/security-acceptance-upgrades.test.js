@@ -283,6 +283,7 @@ function buildSeed() {
 
 describe("acceptance security upgrades", () => {
   beforeEach(() => {
+    vi.setSystemTime(new Date("2026-03-29T12:00:00Z"));
     fakeDb = createFakeDb(buildSeed());
   });
 

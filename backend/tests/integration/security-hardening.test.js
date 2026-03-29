@@ -288,6 +288,7 @@ function seedBase() {
 
 describe("security hardening", () => {
   beforeEach(() => {
+    vi.setSystemTime(new Date("2026-03-29T12:00:00Z"));
     fakeDb = createFakeDb(seedBase());
   });
 
@@ -476,12 +477,17 @@ describe("security hardening", () => {
     expect(memberDenied.status).toBe(403);
     expect(managerAllowed.status).toBe(200);
 
-    fakeDb.raw = async () => {
-      throw new Error("DB_PASSWORD=super-secret");
-    };
-    const health = await request(app).get("/api/v1/health");
-    expect(health.status).toBe(500);
-    expect(health.body.error).toBe("Internal server error");
-    expect(JSON.stringify(health.body)).not.toContain("super-secret");
+    const originalRaw = fakeDb.raw;
+    try {
+      fakeDb.raw = async () => {
+        throw new Error("DB_PASSWORD=super-secret");
+      };
+      const health = await request(app).get("/api/v1/health");
+      expect(health.status).toBe(500);
+      expect(health.body.error).toBe("Internal server error");
+      expect(JSON.stringify(health.body)).not.toContain("super-secret");
+    } finally {
+      fakeDb.raw = originalRaw;
+    }
   });
 });

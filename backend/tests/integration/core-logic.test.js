@@ -254,6 +254,7 @@ function seedBase() {
 
 describe("core logic integration coverage", () => {
   beforeEach(() => {
+    vi.setSystemTime(new Date("2026-03-29T12:00:00Z"));
     fakeDb = createFakeDb(seedBase());
   });
 
@@ -267,8 +268,8 @@ describe("core logic integration coverage", () => {
       .send({
         user_id: "member-a",
         resource_id: "room-a",
-        start_time: new Date(Date.now() + 8 * 60 * 60000).toISOString(),
-        end_time: new Date(Date.now() + 9 * 60 * 60000).toISOString(),
+        start_time: "2026-03-29T08:00:00.000Z",
+        end_time: "2026-03-29T09:00:00.000Z",
       });
     expect(success.status).toBe(201);
 
@@ -278,10 +279,8 @@ describe("core logic integration coverage", () => {
       .send({
         user_id: "member-a",
         resource_id: "room-a",
-        start_time: new Date(Date.now() + 40 * 24 * 60 * 60000).toISOString(),
-        end_time: new Date(
-          Date.now() + (40 * 24 * 60 + 60) * 60000,
-        ).toISOString(),
+        start_time: "2026-05-08T12:00:00.000Z",
+        end_time: "2026-05-08T13:00:00.000Z",
       });
     expect(windowRejected.status).toBe(400);
 
@@ -291,10 +290,8 @@ describe("core logic integration coverage", () => {
       .send({
         user_id: "member-a",
         resource_id: "room-a",
-        start_time: new Date(Date.now() + 10 * 60 * 60000).toISOString(),
-        end_time: new Date(
-          Date.now() + 10 * 60 * 60000 + 20 * 60000,
-        ).toISOString(),
+        start_time: "2026-03-29T10:00:00.000Z",
+        end_time: "2026-03-29T10:20:00.000Z",
       });
     expect(durationRejected.status).toBe(400);
 
@@ -304,26 +301,19 @@ describe("core logic integration coverage", () => {
       .send({
         user_id: "member-a",
         resource_id: "room-a",
-        start_time: new Date(
-          Date.now() + 3 * 60 * 60000 + 10 * 60000,
-        ).toISOString(),
-        end_time: new Date(
-          Date.now() + 3 * 60 * 60000 + 40 * 60000,
-        ).toISOString(),
+        start_time: "2026-03-29T15:10:00.000Z",
+        end_time: "2026-03-29T15:40:00.000Z",
       });
     expect(conflictRejected.status).toBe(409);
 
-    const tomorrowDate = new Date(Date.now() + 24 * 60 * 60000)
-      .toISOString()
-      .slice(0, 10);
     const holidayRejected = await request(app)
       .post("/api/v1/reservations")
       .set("Authorization", `Bearer ${TOKENS.member}`)
       .send({
         user_id: "member-a",
         resource_id: "room-a",
-        start_time: `${tomorrowDate}T10:00:00.000Z`,
-        end_time: `${tomorrowDate}T10:30:00.000Z`,
+        start_time: "2026-03-30T10:00:00.000Z",
+        end_time: "2026-03-30T10:30:00.000Z",
       });
     expect(holidayRejected.status).toBe(409);
   });
