@@ -26,6 +26,12 @@ function toDate(value, field) {
   return date;
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 export const securityRouter = new Router();
 
 securityRouter.post(
@@ -164,12 +170,30 @@ securityRouter.get(
   async (ctx) => {
     const severity = String(ctx.query.severity || "").trim();
     const eventType = String(ctx.query.event_type || "").trim();
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
 
     const query = db("security_events").orderBy("created_at", "desc");
+    const countQuery = db("security_events").count({ total: "id" });
     if (severity) query.where({ severity });
     if (eventType) query.where({ event_type: eventType });
-    const rows = await query.limit(500);
-    ctx.body = rows;
+    if (severity) countQuery.where({ severity });
+    if (eventType) countQuery.where({ event_type: eventType });
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
   },
 );
 

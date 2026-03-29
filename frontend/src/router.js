@@ -5,10 +5,14 @@ import CommerceCartPage from "./pages/CommerceCartPage.vue";
 import CommunityFeedPage from "./pages/CommunityFeedPage.vue";
 import EntityPage from "./pages/EntityPage.vue";
 import ExceptionApprovalsPage from "./pages/ExceptionApprovalsPage.vue";
+import LoginPage from "./pages/LoginPage.vue";
 import ModerationConsolePage from "./pages/ModerationConsolePage.vue";
 import RoleDashboardPage from "./pages/RoleDashboardPage.vue";
+import { getActiveRole, hasPermission } from "./auth/roles.js";
+import { AUTH_TOKEN_KEY } from "./services/api.js";
 
 export const routes = [
+  { path: "/login", component: LoginPage },
   { path: "/", component: RoleDashboardPage },
   {
     path: "/availability",
@@ -156,3 +160,21 @@ export const routes = [
   },
   { path: "/access-denied", component: AccessDeniedPage },
 ];
+
+export function installRouteGuards(router) {
+  router.beforeEach((to) => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (to.path !== "/login" && !token) {
+      return "/login";
+    }
+    if (to.path === "/login" && token) {
+      return "/";
+    }
+
+    const permission = to.meta?.permission;
+    if (!permission) return true;
+    const role = getActiveRole();
+    if (hasPermission(role, permission)) return true;
+    return "/access-denied";
+  });
+}

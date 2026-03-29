@@ -1,12 +1,16 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   getActiveRole,
+  getRoleLabel,
   hasPermission,
-  roleOptions,
   setActiveRole,
 } from "./auth/roles.js";
+import {
+  clearStoredActorUserId,
+  clearStoredAuthToken,
+} from "./services/api.js";
 
 const selectedRole = ref(getActiveRole());
 const router = useRouter();
@@ -128,35 +132,43 @@ const visibleNavItems = computed(() => {
   );
 });
 
-function onRoleChange(event) {
-  const role = event.target.value;
-  setActiveRole(role);
-  selectedRole.value = role;
-  const requiredPermission = route.meta?.permission;
-  if (requiredPermission && !hasPermission(role, requiredPermission)) {
-    router.push("/");
-  }
-  window.dispatchEvent(new Event("studio-role-changed"));
+const activeRoleLabel = computed(() => getRoleLabel(selectedRole.value));
+const isLoginRoute = computed(() => route.path === "/login");
+
+function syncRoleFromStorage() {
+  selectedRole.value = getActiveRole();
 }
+
+async function logout() {
+  clearStoredAuthToken();
+  clearStoredActorUserId();
+  setActiveRole("member");
+  syncRoleFromStorage();
+  await router.replace("/login");
+}
+
+onMounted(() => {
+  window.addEventListener("studio-role-changed", syncRoleFromStorage);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("studio-role-changed", syncRoleFromStorage);
+});
 </script>
 
 <template>
-  <div class="layout">
+  <div v-if="isLoginRoute" class="layout">
+    <main class="content">
+      <RouterView />
+    </main>
+  </div>
+
+  <div v-else class="layout">
     <aside class="sidebar">
       <h1>Studio Manager</h1>
       <p>Offline-first local platform</p>
-      <label class="role-selector">
-        <span>Active Role</span>
-        <select :value="selectedRole" @change="onRoleChange">
-          <option
-            v-for="option in roleOptions"
-            :key="option.value"
-            :value="option.value"
-          >
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
+      <p class="badge">Signed in as: {{ activeRoleLabel }}</p>
+      <button class="secondary" @click="logout">Logout</button>
       <nav>
         <RouterLink
           v-for="item in visibleNavItems"

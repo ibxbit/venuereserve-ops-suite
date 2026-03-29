@@ -50,6 +50,15 @@ npm install
 
 ### 2) Configure environment
 
+**Linux / macOS:**
+
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+```
+
+**Windows (Command Prompt):**
+
 ```bash
 copy backend\.env.example backend\.env
 copy frontend\.env.example frontend\.env

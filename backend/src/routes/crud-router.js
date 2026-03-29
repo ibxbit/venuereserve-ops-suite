@@ -32,6 +32,12 @@ function normalizeRecord(record) {
   return normalized;
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 export function buildCrudRouter({
   entityName,
   tableName,
@@ -55,11 +61,27 @@ export function buildCrudRouter({
     }
   }
 
+  function applyListFilters(query, source) {
+    for (const field of allowedFields) {
+      const value = source[field];
+      if (value === undefined || value === null || value === "") continue;
+      query.where({ [field]: value });
+    }
+  }
+
   router.get(
     `/${entityName}`,
     requirePermission(permissions.list),
     async (ctx) => {
+      const page = parsePositiveInt(ctx.query.page, 1);
+      const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+      const offset = (page - 1) * perPage;
+
       const query = db(tableName).orderBy("created_at", "desc");
+      const countQuery = db(tableName).count({ total: "id" });
+      applyListFilters(query, ctx.query);
+      applyListFilters(countQuery, ctx.query);
+
       if (
         ctx.state.actorRole === "member" &&
         memberScopedEntities.has(entityName)
@@ -68,9 +90,22 @@ export function buildCrudRouter({
           ctx.throw(400, "x-actor-user-id is required for member scope");
         }
         query.where({ user_id: ctx.state.actorUserId });
+        countQuery.where({ user_id: ctx.state.actorUserId });
       }
-      const rows = await query;
-      ctx.body = rows.map(normalizeRecord);
+
+      const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+        countQuery,
+        query.limit(perPage).offset(offset),
+      ]);
+
+      ctx.body = {
+        data: rows.map(normalizeRecord),
+        pagination: {
+          page,
+          per_page: perPage,
+          total: Number(total || 0),
+        },
+      };
     },
   );
 

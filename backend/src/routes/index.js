@@ -13,6 +13,12 @@ import { securityRouter } from "./security.js";
 
 export const apiRouter = new Router({ prefix: "/api/v1" });
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 apiRouter.get("/health", async (ctx) => {
   await db.raw("SELECT 1");
   ctx.body = {
@@ -380,8 +386,41 @@ apiRouter.use(securityRouter.routes());
 apiRouter.use(securityRouter.allowedMethods());
 
 apiRouter.get("/audit-trails", requirePermission("audit.read"), async (ctx) => {
-  const rows = await db("audit_trails").orderBy("created_at", "desc");
-  ctx.body = rows;
+  const page = parsePositiveInt(ctx.query.page, 1);
+  const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+  const offset = (page - 1) * perPage;
+  const entity = String(ctx.query.entity || "").trim();
+  const action = String(ctx.query.action || "").trim();
+  const actorUserId = String(ctx.query.actor_user_id || "").trim();
+
+  const query = db("audit_trails").orderBy("created_at", "desc");
+  const countQuery = db("audit_trails").count({ total: "id" });
+  if (entity) {
+    query.where({ entity });
+    countQuery.where({ entity });
+  }
+  if (action) {
+    query.where({ action });
+    countQuery.where({ action });
+  }
+  if (actorUserId) {
+    query.where({ actor_user_id: actorUserId });
+    countQuery.where({ actor_user_id: actorUserId });
+  }
+
+  const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+    countQuery,
+    query.limit(perPage).offset(offset),
+  ]);
+
+  ctx.body = {
+    data: rows,
+    pagination: {
+      page,
+      per_page: perPage,
+      total: Number(total || 0),
+    },
+  };
 });
 
 apiRouter.get(

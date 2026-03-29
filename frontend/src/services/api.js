@@ -1,10 +1,9 @@
 import axios from "axios";
-import { getActiveRole } from "../auth/roles.js";
 
 const STORAGE_PREFIX = "studio-cache";
 const QUEUE_KEY = "studio-offline-queue";
-const ACTOR_ID_KEY = "studio-actor-user-id";
-const AUTH_TOKEN_KEY = "studio-auth-token";
+export const ACTOR_ID_KEY = "studio-actor-user-id";
+export const AUTH_TOKEN_KEY = "studio-auth-token";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api/v1",
@@ -17,9 +16,6 @@ api.interceptors.request.use((config) => {
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  headers["x-user-role"] = getActiveRole();
-  headers["x-actor-user-id"] =
-    localStorage.getItem(ACTOR_ID_KEY) || "local-operator";
   return { ...config, headers };
 });
 
@@ -29,6 +25,10 @@ export function getStoredAuthToken() {
 
 export function clearStoredAuthToken() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
+}
+
+export function clearStoredActorUserId() {
+  localStorage.removeItem(ACTOR_ID_KEY);
 }
 
 export async function loginWithPassword({ email, password }) {
@@ -113,16 +113,54 @@ export async function syncQueue() {
   setQueue(remaining);
 }
 
-export async function fetchList(entity) {
+function extractPaginatedList(payload) {
+  if (Array.isArray(payload)) {
+    return { data: payload, pagination: null };
+  }
+  if (payload && Array.isArray(payload.data)) {
+    return {
+      data: payload.data,
+      pagination: payload.pagination || null,
+    };
+  }
+  return { data: [], pagination: null };
+}
+
+export async function fetchList(
+  entity,
+  { page = 1, perPage = 20, filters = {} } = {},
+) {
   try {
-    const response = await api.get(`/${entity}`);
-    setCachedList(entity, response.data);
-    return { data: response.data, offline: false, forbidden: false };
+    const response = await api.get(`/${entity}`, {
+      params: {
+        page,
+        per_page: perPage,
+        ...filters,
+      },
+    });
+    const parsed = extractPaginatedList(response.data);
+    setCachedList(entity, parsed.data);
+    return {
+      data: parsed.data,
+      pagination: parsed.pagination,
+      offline: false,
+      forbidden: false,
+    };
   } catch (error) {
     if (isForbidden(error)) {
-      return { data: [], offline: false, forbidden: true };
+      return {
+        data: [],
+        pagination: null,
+        offline: false,
+        forbidden: true,
+      };
     }
-    return { data: getCachedList(entity), offline: true, forbidden: false };
+    return {
+      data: getCachedList(entity),
+      pagination: null,
+      offline: true,
+      forbidden: false,
+    };
   }
 }
 
@@ -300,10 +338,10 @@ export async function createReservationOverride(payload) {
 }
 
 export async function fetchAttendanceHistory(userId = "") {
-  const params = {};
+  const params = { page: 1, per_page: 50 };
   if (userId) params.user_id = userId;
   const response = await api.get("/attendance-history", { params });
-  return response.data;
+  return response.data?.data || response.data;
 }
 
 export async function fetchCommerceCatalog() {
@@ -366,13 +404,17 @@ export async function mergeCommerceOrders(orderIds, payload = {}) {
 }
 
 export async function fetchCommunityFeed() {
-  const response = await api.get("/community/feed");
-  return response.data;
+  const response = await api.get("/community/feed", {
+    params: { page: 1, per_page: 50 },
+  });
+  return response.data?.data || response.data;
 }
 
 export async function fetchMyCommunityReports() {
-  const response = await api.get("/community/reports/mine");
-  return response.data;
+  const response = await api.get("/community/reports/mine", {
+    params: { page: 1, per_page: 50 },
+  });
+  return response.data?.data || response.data;
 }
 
 export async function createCommunityCaptchaChallenge(payload = {}) {
@@ -391,7 +433,9 @@ export async function reportCommunityPost(postId, payload) {
 }
 
 export async function fetchCommunityModerationQueue() {
-  const response = await api.get("/community/moderation/queue");
+  const response = await api.get("/community/moderation/queue", {
+    params: { page: 1, per_page: 50 },
+  });
   return response.data;
 }
 

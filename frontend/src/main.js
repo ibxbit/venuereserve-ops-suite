@@ -1,8 +1,7 @@
 import { createApp } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import App from "./App.vue";
-import { getActiveRole, hasPermission } from "./auth/roles.js";
-import { routes } from "./router.js";
+import { installRouteGuards, routes } from "./router.js";
 import "./styles.css";
 
 const router = createRouter({
@@ -10,12 +9,6 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to) => {
-  const permission = to.meta?.permission;
-  if (!permission) return true;
-  const role = getActiveRole();
-  if (hasPermission(role, permission)) return true;
-  return "/access-denied";
-});
+installRouteGuards(router);
 
 createApp(App).use(router).mount("#app");

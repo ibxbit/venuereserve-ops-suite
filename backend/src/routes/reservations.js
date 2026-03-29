@@ -173,21 +173,64 @@ function parseOverridePayload(payload) {
   };
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 export const reservationRouter = new Router();
 
 reservationRouter.get(
   "/reservations",
   requirePermission("reservations.read"),
   async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+    const status = String(ctx.query.status || "").trim();
+    const resourceId = String(ctx.query.resource_id || "").trim();
+    const userIdFilter = String(ctx.query.user_id || "").trim();
+
     const query = db("reservations").orderBy("start_time", "asc");
+    const countQuery = db("reservations").count({ total: "id" });
+
+    if (status) {
+      query.where({ status });
+      countQuery.where({ status });
+    }
+    if (resourceId) {
+      query.where({ resource_id: resourceId });
+      countQuery.where({ resource_id: resourceId });
+    }
+
     if (ctx.state.actorRole === "member") {
       if (!ctx.state.actorUserId) {
         ctx.throw(400, "x-actor-user-id is required for member scope");
       }
+      if (userIdFilter && userIdFilter !== ctx.state.actorUserId) {
+        ctx.throw(403, "members can only filter their own reservations");
+      }
       query.where({ user_id: ctx.state.actorUserId });
+      countQuery.where({ user_id: ctx.state.actorUserId });
+    } else if (userIdFilter) {
+      query.where({ user_id: userIdFilter });
+      countQuery.where({ user_id: userIdFilter });
     }
-    const rows = await query;
-    ctx.body = rows;
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
   },
 );
 
@@ -608,13 +651,35 @@ reservationRouter.get(
   "/attendance-history",
   requirePermission("users.read"),
   async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
     const userId = String(ctx.query.user_id || "").trim();
+    const eventType = String(ctx.query.event_type || "").trim();
     const query = db("attendance_history").orderBy("event_time", "desc");
+    const countQuery = db("attendance_history").count({ total: "id" });
     if (userId) {
       query.where({ user_id: userId });
+      countQuery.where({ user_id: userId });
     }
-    const rows = await query.limit(300);
-    ctx.body = rows;
+    if (eventType) {
+      query.where({ event_type: eventType });
+      countQuery.where({ event_type: eventType });
+    }
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
   },
 );
 

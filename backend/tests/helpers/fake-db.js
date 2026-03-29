@@ -169,6 +169,11 @@ class Query {
     return this;
   }
 
+  offset(n) {
+    this.rows = this.rows.slice(n);
+    return this;
+  }
+
   select() {
     return this;
   }

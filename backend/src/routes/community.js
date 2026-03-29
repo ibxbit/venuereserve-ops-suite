@@ -12,6 +12,12 @@ function normalizeText(text) {
   return String(text || "").trim();
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 function getActorUserId(ctx) {
   return normalizeText(ctx.state.actorUserId) || null;
 }
@@ -198,11 +204,31 @@ communityRouter.get(
   "/community/feed",
   requirePermission("community.read"),
   async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+    const authorId = normalizeText(ctx.query.author_id || "");
+    const status = normalizeText(ctx.query.status || "") || "published";
+
     const posts = await db("community_posts")
-      .where({ status: "published" })
+      .where({ status })
       .whereNull("parent_post_id")
       .orderBy("created_at", "desc")
-      .limit(100);
+      .limit(perPage)
+      .offset(offset);
+
+    if (authorId) {
+      posts.where({ user_id: authorId });
+    }
+
+    const totalQuery = db("community_posts")
+      .count({ total: "id" })
+      .where({ status })
+      .whereNull("parent_post_id");
+    if (authorId) {
+      totalQuery.where({ user_id: authorId });
+    }
+    const totalRow = await totalQuery.first();
 
     const postIds = posts.map((post) => post.id);
     const replies = postIds.length
@@ -219,10 +245,17 @@ communityRouter.get(
       return acc;
     }, {});
 
-    ctx.body = posts.map((post) => ({
-      ...post,
-      replies: repliesByParent[post.id] || [],
-    }));
+    ctx.body = {
+      data: posts.map((post) => ({
+        ...post,
+        replies: repliesByParent[post.id] || [],
+      })),
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(totalRow?.total || 0),
+      },
+    };
   },
 );
 
@@ -230,15 +263,40 @@ communityRouter.get(
   "/community/reports/mine",
   requirePermission("community.report"),
   async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+    const status = normalizeText(ctx.query.status || "");
     const userId = getActorUserId(ctx);
     if (!userId) {
       ctx.throw(400, "x-actor-user-id is required");
     }
-    const rows = await db("community_reports")
+
+    const query = db("community_reports")
       .where({ reporter_user_id: userId })
-      .orderBy("created_at", "desc")
-      .limit(200);
-    ctx.body = rows;
+      .orderBy("created_at", "desc");
+    const countQuery = db("community_reports")
+      .count({ total: "id" })
+      .where({ reporter_user_id: userId });
+
+    if (status) {
+      query.where({ status });
+      countQuery.where({ status });
+    }
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
   },
 );
 
@@ -481,15 +539,42 @@ communityRouter.get(
   "/community/moderation/queue",
   requirePermission("community.moderate"),
   async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+
     const heldPosts = await db("community_posts")
       .where({ status: "held" })
       .orderBy("created_at", "asc")
-      .limit(300);
+      .limit(perPage)
+      .offset(offset);
     const reports = await db("community_reports")
       .whereIn("status", ["open", "in_review"])
       .orderBy("created_at", "asc")
-      .limit(300);
-    ctx.body = { held_posts: heldPosts, reports };
+      .limit(perPage)
+      .offset(offset);
+
+    const [heldTotalRow, reportTotalRow] = await Promise.all([
+      db("community_posts")
+        .count({ total: "id" })
+        .where({ status: "held" })
+        .first(),
+      db("community_reports")
+        .count({ total: "id" })
+        .whereIn("status", ["open", "in_review"])
+        .first(),
+    ]);
+
+    ctx.body = {
+      held_posts: heldPosts,
+      reports,
+      pagination: {
+        page,
+        per_page: perPage,
+        held_posts_total: Number(heldTotalRow?.total || 0),
+        reports_total: Number(reportTotalRow?.total || 0),
+      },
+    };
   },
 );
 

@@ -1,4 +1,5 @@
 import { hasPermission } from "../auth/roles.js";
+import { db } from "../db.js";
 
 export function requireAuthenticated(ctx, next) {
   if (!ctx.state.actorUserId) {
@@ -12,9 +13,32 @@ export function requirePermission(permission) {
     if (!ctx.state.actorUserId) {
       ctx.throw(401, "authentication required");
     }
-    if (!hasPermission(ctx.state.actorRole, permission)) {
+
+    const roleAllowed = hasPermission(ctx.state.actorRole, permission);
+    const override = await db("user_permissions")
+      .where({
+        user_id: ctx.state.actorUserId,
+        permission_key: permission,
+      })
+      .orderBy("updated_at", "desc")
+      .first();
+
+    if (override) {
+      const isAllowed =
+        override.is_allowed === true ||
+        override.is_allowed === 1 ||
+        override.is_allowed === "1";
+      if (!isAllowed) {
+        ctx.throw(403, "forbidden");
+      }
+      await next();
+      return;
+    }
+
+    if (!roleAllowed) {
       ctx.throw(403, "forbidden");
     }
+
     await next();
   };
 }

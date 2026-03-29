@@ -437,10 +437,12 @@ describe("security hardening", () => {
 
     expect(reservations.status).toBe(200);
     expect(orders.status).toBe(200);
-    expect(reservations.body.every((row) => row.user_id === "member-a")).toBe(
+    expect(
+      reservations.body.data.every((row) => row.user_id === "member-a"),
+    ).toBe(true);
+    expect(orders.body.data.every((row) => row.user_id === "member-a")).toBe(
       true,
     );
-    expect(orders.body.every((row) => row.user_id === "member-a")).toBe(true);
 
     const checkoutMissingKey = await request(app)
       .post("/api/v1/commerce/checkout")
