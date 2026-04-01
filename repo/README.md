@@ -41,7 +41,16 @@ From the `repo` directory:
 ./run_tests.sh
 ```
 
-This script is idempotent and runs:
+This script is idempotent, non-interactive, and runs tests in the backend Docker container (Node 20) via `docker compose exec -T backend ...`.
+
+Behavior:
+
+- If Compose services are not running, it starts them automatically.
+- It runs all unit tests from `unit_tests/`.
+- It runs all API tests from `API_tests/`.
+- If Docker Compose is unavailable, it falls back to host execution only when host Node is `20+`; otherwise it fails fast with a clear message.
+
+It runs:
 
 - all unit tests from `unit_tests/`
 - all API tests from `API_tests/`

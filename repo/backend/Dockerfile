@@ -9,6 +9,8 @@ COPY frontend/package.json frontend/package.json
 RUN npm ci
 
 COPY backend backend
+COPY unit_tests unit_tests
+COPY API_tests API_tests
 
 EXPOSE 4000
 
