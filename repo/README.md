@@ -24,21 +24,36 @@ This single command starts all declared dependencies (MySQL, backend, frontend),
 - Backend API (Koa): `http://localhost:4000/api/v1`
 - MySQL: `localhost:3306`
 
+## Project Structure
+
+```text
+repo/
+├── unit_tests/
+├── API_tests/
+└── run_tests.sh
+```
+
 ## Running Tests
 
 From the `repo` directory:
 
 ```bash
-npm test
+./run_tests.sh
 ```
 
-This runs the backend automated test suite (unit + integration) with Vitest.
+This script is idempotent and runs:
 
-## Verification method
+- all unit tests from `unit_tests/`
+- all API tests from `API_tests/`
 
-1. Open `http://localhost:5173` and confirm the dashboard loads.
-2. Open `http://localhost:4000/api/v1/health` and confirm JSON contains `"status":"ok"`.
-3. Confirm DB-backed endpoints respond, for example `http://localhost:4000/api/v1/resources`.
+## Verification Guide (Core Features)
+
+1. Run `docker compose up` from `repo/` and wait until all three services are healthy/running.
+2. Open `http://localhost:5173` and confirm the frontend loads.
+3. Open `http://localhost:4000/api/v1/health` and confirm the response includes `"status":"ok"`.
+4. Verify a protected route returns standard auth errors, for example call `GET /api/v1/me/dashboard` without a token and confirm `401` JSON response.
+5. Verify RBAC behavior by logging in as different roles and confirming allowed/forbidden actions in dashboard/API.
+6. Run `./run_tests.sh` and confirm all unit + API tests pass.
 
 ## Optional Local (Non-Docker) Setup
 
