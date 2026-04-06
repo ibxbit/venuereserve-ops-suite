@@ -12,8 +12,17 @@ import {
   splitCommerceOrder,
   transitionCommerceOrder,
 } from "../services/api.js";
+import {
+  formatCouponRule,
+  getApiErrorMessage,
+  hasActiveAction,
+  makeIdempotencyKey,
+  releaseActionLock,
+  withActionLock,
+} from "../utils/client-helpers.js";
 
 const userId = ref("member-local");
+const reservationLines = ref([]);
 const catalog = ref([]);
 const coupons = ref([]);
 const couponCode = ref("");
@@ -27,13 +36,20 @@ const manualReference = ref("");
 const message = ref("");
 const error = ref("");
 const loading = ref(false);
+const RESERVATION_DRAFT_KEY = "studio-reservation-cart-draft";
+const quoteRecalcQueued = ref(false);
+const actionLock = ref({
+  quote: false,
+  checkout: false,
+  split: false,
+  merge: false,
+  pay: false,
+  cancel: false,
+  fulfill: false,
+  expire: false,
+});
 
-function makeIdempotencyKey(prefix) {
-  if (window.crypto?.randomUUID) {
-    return `${prefix}-${window.crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
+const hasActionInProgress = computed(() => hasActiveAction(actionLock));
 
 const selectedItems = computed(() => {
   return Object.entries(quantities.value)
@@ -61,9 +77,32 @@ function setQuantity(itemId, next) {
   };
 }
 
+const selectedCoupon = computed(() => {
+  const code = String(couponCode.value || "").trim().toLowerCase();
+  if (!code) return null;
+  return (
+    coupons.value.find(
+      (coupon) => String(coupon.code || "").trim().toLowerCase() === code,
+    ) || null
+  );
+});
+
+const couponRuleHint = computed(() => formatCouponRule(selectedCoupon.value));
+
+const quotedLineItems = computed(() => {
+  if (!Array.isArray(quote.value?.lines)) return [];
+  return quote.value.lines.filter((line) => line.line_type !== "reservation");
+});
+
 async function recalcQuote() {
-  if (!selectedItems.value.length) {
+  if (!withActionLock(actionLock, "quote")) {
+    quoteRecalcQueued.value = true;
+    return;
+  }
+
+  if (!selectedItems.value.length && !reservationLines.value.length) {
     quote.value = null;
+    releaseActionLock(actionLock, "quote");
     return;
   }
 
@@ -73,17 +112,26 @@ async function recalcQuote() {
     quote.value = await quoteCommerceCart({
       user_id: userId.value,
       items: selectedItems.value,
+      reservation_lines: reservationLines.value,
       coupon_code: couponCode.value || null,
     });
   } catch (err) {
-    error.value = err?.response?.data?.error || "Could not recalculate cart.";
+    error.value = getApiErrorMessage(err, "Could not recalculate cart.");
   }
   loading.value = false;
+  releaseActionLock(actionLock, "quote");
+  if (quoteRecalcQueued.value) {
+    quoteRecalcQueued.value = false;
+    await recalcQuote();
+  }
 }
 
 async function runCheckout() {
+  if (!withActionLock(actionLock, "checkout")) return;
+
   if (!quote.value) {
     error.value = "Cart is empty.";
+    releaseActionLock(actionLock, "checkout");
     return;
   }
 
@@ -94,6 +142,7 @@ async function runCheckout() {
     checkoutResult.value = await checkoutCommerceCart({
       user_id: userId.value,
       items: selectedItems.value,
+      reservation_lines: reservationLines.value,
       coupon_code: couponCode.value || null,
       split_mode: splitMode.value,
       idempotency_key: makeIdempotencyKey("checkout"),
@@ -101,29 +150,40 @@ async function runCheckout() {
     message.value =
       "Checkout created. Complete payment before 15-minute expiry.";
   } catch (err) {
-    error.value = err?.response?.data?.error || "Checkout failed.";
+    error.value = getApiErrorMessage(err, "Checkout failed.");
   }
   loading.value = false;
+  releaseActionLock(actionLock, "checkout");
 }
 
 async function runSplit(orderId) {
+  if (!withActionLock(actionLock, "split")) return;
   try {
     const response = await splitCommerceOrder(orderId, {
       idempotency_key: makeIdempotencyKey("split"),
     });
     message.value = `Split completed from ${response.split_from_order_id}.`;
   } catch (err) {
-    error.value = err?.response?.data?.error || "Split failed.";
+    error.value = getApiErrorMessage(err, "Split failed.");
   }
+  releaseActionLock(actionLock, "split");
+}
+
+function removeReservationLine(reservationId) {
+  reservationLines.value = reservationLines.value.filter(
+    (line) => line.reservation_id !== reservationId,
+  );
 }
 
 async function runMerge() {
+  if (!withActionLock(actionLock, "merge")) return;
   const orderIds = mergeOrderIdsText.value
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
   if (orderIds.length < 2) {
     error.value = "Enter at least two order IDs separated by commas.";
+    releaseActionLock(actionLock, "merge");
     return;
   }
   try {
@@ -132,11 +192,18 @@ async function runMerge() {
     });
     message.value = `Merged into order ${response.merged_order_id}.`;
   } catch (err) {
-    error.value = err?.response?.data?.error || "Merge failed.";
+    error.value = getApiErrorMessage(err, "Merge failed.");
   }
+  releaseActionLock(actionLock, "merge");
 }
 
 async function runPay(orderId) {
+  if (!withActionLock(actionLock, "pay")) return;
+  if (paymentMethod.value === "card_terminal" && !manualReference.value.trim()) {
+    error.value = "Manual payment reference is required for card terminal payments.";
+    releaseActionLock(actionLock, "pay");
+    return;
+  }
   try {
     const response = await payCommerceOrder(orderId, {
       idempotency_key: makeIdempotencyKey("pay"),
@@ -145,11 +212,13 @@ async function runPay(orderId) {
     });
     message.value = `Payment captured for ${response.order_id}. State: ${response.state}.`;
   } catch (err) {
-    error.value = err?.response?.data?.error || "Payment failed.";
+    error.value = getApiErrorMessage(err, "Payment failed.");
   }
+  releaseActionLock(actionLock, "pay");
 }
 
 async function runCancel(orderId) {
+  if (!withActionLock(actionLock, "cancel")) return;
   try {
     const response = await cancelCommerceOrder(orderId, {
       idempotency_key: makeIdempotencyKey("cancel"),
@@ -157,11 +226,13 @@ async function runCancel(orderId) {
     });
     message.value = `Order ${response.order_id} cancelled.`;
   } catch (err) {
-    error.value = err?.response?.data?.error || "Cancel failed.";
+    error.value = getApiErrorMessage(err, "Cancel failed.");
   }
+  releaseActionLock(actionLock, "cancel");
 }
 
 async function runFulfill(orderId) {
+  if (!withActionLock(actionLock, "fulfill")) return;
   try {
     const response = await transitionCommerceOrder(orderId, {
       idempotency_key: makeIdempotencyKey("transition"),
@@ -170,21 +241,24 @@ async function runFulfill(orderId) {
     });
     message.value = `Order ${response.order_id} transitioned to ${response.state}.`;
   } catch (err) {
-    error.value = err?.response?.data?.error || "Transition failed.";
+    error.value = getApiErrorMessage(err, "Transition failed.");
   }
+  releaseActionLock(actionLock, "fulfill");
 }
 
 async function runExpireSweep() {
+  if (!withActionLock(actionLock, "expire")) return;
   try {
     const response = await expireUnpaidCommerceOrders();
     message.value = `Expired ${response.expired_count} unpaid order(s).`;
   } catch (err) {
-    error.value = err?.response?.data?.error || "Expire sweep failed.";
+    error.value = getApiErrorMessage(err, "Expire sweep failed.");
   }
+  releaseActionLock(actionLock, "expire");
 }
 
 watch(
-  [quantities, couponCode, userId],
+  [quantities, couponCode, userId, reservationLines],
   async () => {
     await recalcQuote();
   },
@@ -192,6 +266,24 @@ watch(
 );
 
 onMounted(async () => {
+  const draft = localStorage.getItem(RESERVATION_DRAFT_KEY);
+  if (draft) {
+    try {
+      const parsed = JSON.parse(draft);
+      if (Array.isArray(parsed?.reservation_lines)) {
+        reservationLines.value = parsed.reservation_lines
+          .map((line) => ({ reservation_id: String(line?.reservation_id || "") }))
+          .filter((line) => line.reservation_id);
+      }
+      if (parsed?.user_id) {
+        userId.value = String(parsed.user_id);
+      }
+    } catch {
+      reservationLines.value = [];
+    }
+    localStorage.removeItem(RESERVATION_DRAFT_KEY);
+  }
+
   catalog.value = await fetchCommerceCatalog();
   coupons.value = await fetchCommerceCoupons();
   quantities.value = Object.fromEntries(
@@ -237,6 +329,7 @@ onMounted(async () => {
               {{ coupon.name }}
             </option>
           </datalist>
+          <small v-if="couponRuleHint">{{ couponRuleHint }}</small>
         </label>
         <label>
           <span>Checkout split mode</span>
@@ -297,6 +390,21 @@ onMounted(async () => {
       </div>
     </div>
 
+    <div class="panel">
+      <h3>Reservation Lines</h3>
+      <p v-if="!reservationLines.length">
+        No reservation lines yet. Add one from the Availability page.
+      </p>
+      <ul v-else class="plain-list">
+        <li v-for="line in reservationLines" :key="line.reservation_id">
+          Reservation {{ line.reservation_id }}
+          <button class="secondary" @click="removeReservationLine(line.reservation_id)">
+            Remove
+          </button>
+        </li>
+      </ul>
+    </div>
+
     <div v-if="quote" class="panel">
       <h3>Real-Time Pricing</h3>
       <p>Subtotal: ${{ quote.subtotal_amount }}</p>
@@ -324,10 +432,25 @@ onMounted(async () => {
         </li>
       </ul>
 
-      <button @click="runCheckout">Checkout</button>
-      <button class="secondary" @click="runExpireSweep">
+      <button :disabled="hasActionInProgress" @click="runCheckout">
+        {{ actionLock.checkout ? "Checking out..." : "Checkout" }}
+      </button>
+      <button
+        class="secondary"
+        :disabled="hasActionInProgress"
+        @click="runExpireSweep"
+      >
         Expire unpaid 15m+
       </button>
+
+      <h4>Coupon Allocation</h4>
+      <p v-if="!quotedLineItems.length">No discounted catalog lines yet.</p>
+      <ul v-else class="plain-list">
+        <li v-for="line in quotedLineItems" :key="line.line_key">
+          {{ line.item_name }} - subtotal ${{ line.subtotal_amount }} - discount
+          ${{ line.discount_amount }} - total ${{ line.total_amount }}
+        </li>
+      </ul>
     </div>
 
     <div v-if="checkoutResult" class="panel">
@@ -337,12 +460,18 @@ onMounted(async () => {
         <li v-for="order in checkoutResult.orders" :key="order.id">
           {{ order.id }} - {{ order.fulfillment_path }} - {{ order.state }} -
           ${{ order.total_amount }}
-          <button class="secondary" @click="runPay(order.id)">Pay</button>
-          <button class="secondary" @click="runCancel(order.id)">Cancel</button>
-          <button class="secondary" @click="runFulfill(order.id)">
+          <button class="secondary" :disabled="hasActionInProgress" @click="runPay(order.id)">
+            {{ actionLock.pay ? "Paying..." : "Pay" }}
+          </button>
+          <button class="secondary" :disabled="hasActionInProgress" @click="runCancel(order.id)">
+            {{ actionLock.cancel ? "Cancelling..." : "Cancel" }}
+          </button>
+          <button class="secondary" :disabled="hasActionInProgress" @click="runFulfill(order.id)">
             Mark fulfilled
           </button>
-          <button class="secondary" @click="runSplit(order.id)">Split</button>
+          <button class="secondary" :disabled="hasActionInProgress" @click="runSplit(order.id)">
+            Split
+          </button>
         </li>
       </ul>
     </div>
@@ -355,7 +484,9 @@ onMounted(async () => {
           <input v-model="mergeOrderIdsText" type="text" />
         </label>
       </div>
-      <button class="secondary" @click="runMerge">Merge orders</button>
+      <button class="secondary" :disabled="hasActionInProgress" @click="runMerge">
+        {{ actionLock.merge ? "Merging..." : "Merge orders" }}
+      </button>
     </div>
   </section>
 </template>

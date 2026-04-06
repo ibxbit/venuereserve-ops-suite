@@ -1,27 +1,47 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   decideBookingException,
   fetchBookingExceptions,
 } from "../services/api.js";
+import {
+  getApiErrorMessage,
+  hasActiveAction,
+  releaseActionLock,
+  withActionLock,
+} from "../utils/client-helpers.js";
 
 const rows = ref([]);
 const loading = ref(false);
 const notice = ref("");
 const error = ref("");
 const decisionReason = ref({});
+const actionLock = ref({
+  load: false,
+  decide: false,
+});
+
+const hasActionInProgress = computed(() => hasActiveAction(actionLock));
 
 async function loadPending() {
+  if (!withActionLock(actionLock, "load")) return;
   loading.value = true;
   error.value = "";
-  rows.value = await fetchBookingExceptions({ status: "pending" });
+  try {
+    rows.value = await fetchBookingExceptions({ status: "pending" });
+  } catch (err) {
+    error.value = getApiErrorMessage(err, "Could not load pending exceptions.");
+  }
   loading.value = false;
+  releaseActionLock(actionLock, "load");
 }
 
 async function decide(id, decision) {
+  if (!withActionLock(actionLock, "decide")) return;
   const reason = String(decisionReason.value[id] || "").trim();
   if (!reason) {
     error.value = "Decision reason is required.";
+    releaseActionLock(actionLock, "decide");
     return;
   }
 
@@ -35,8 +55,9 @@ async function decide(id, decision) {
     notice.value = `Request ${id} ${decision}.`;
     await loadPending();
   } catch (err) {
-    error.value = err?.response?.data?.error || "Could not submit decision.";
+    error.value = getApiErrorMessage(err, "Could not submit decision.");
   }
+  releaseActionLock(actionLock, "decide");
 }
 
 onMounted(async () => {
@@ -56,7 +77,9 @@ onMounted(async () => {
     <p v-if="error" class="badge muted">{{ error }}</p>
 
     <div class="panel">
-      <button class="secondary" @click="loadPending">Refresh pending</button>
+      <button class="secondary" :disabled="hasActionInProgress" @click="loadPending">
+        {{ actionLock.load ? "Refreshing..." : "Refresh pending" }}
+      </button>
       <div class="table-wrap">
         <table>
           <thead>
@@ -81,10 +104,10 @@ onMounted(async () => {
                 <input v-model="decisionReason[row.id]" type="text" />
               </td>
               <td>
-                <button class="secondary" @click="decide(row.id, 'approved')">
+                <button class="secondary" :disabled="hasActionInProgress" @click="decide(row.id, 'approved')">
                   Approve
                 </button>
-                <button class="danger" @click="decide(row.id, 'rejected')">
+                <button class="danger" :disabled="hasActionInProgress" @click="decide(row.id, 'rejected')">
                   Reject
                 </button>
               </td>

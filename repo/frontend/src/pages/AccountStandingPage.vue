@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   createReservationOverride,
   fetchAttendanceHistory,
@@ -8,6 +8,12 @@ import {
   fetchStandingPolicy,
   updateStandingPolicy,
 } from "../services/api.js";
+import {
+  getApiErrorMessage,
+  hasActiveAction,
+  releaseActionLock,
+  withActionLock,
+} from "../utils/client-helpers.js";
 
 const userId = ref("");
 const standing = ref(null);
@@ -16,6 +22,15 @@ const overrides = ref([]);
 const attendanceRows = ref([]);
 const notice = ref("");
 const error = ref("");
+const actionLock = ref({
+  lookup: false,
+  policy: false,
+  override: false,
+  overridesLoad: false,
+  attendanceLoad: false,
+});
+
+const hasActionInProgress = computed(() => hasActiveAction(actionLock));
 
 const policyForm = ref({
   lookback_days: 30,
@@ -54,33 +69,54 @@ async function loadPolicy() {
 }
 
 async function loadOverrides() {
-  overrides.value = await fetchReservationOverrides({
-    userId: overrideForm.value.user_id || userId.value,
-  });
+  if (!withActionLock(actionLock, "overridesLoad")) return;
+  try {
+    overrides.value = await fetchReservationOverrides({
+      userId: overrideForm.value.user_id || userId.value,
+    });
+  } catch (err) {
+    error.value = getApiErrorMessage(err, "Could not load overrides.");
+  }
+  releaseActionLock(actionLock, "overridesLoad");
 }
 
 async function loadAttendance() {
-  attendanceRows.value = await fetchAttendanceHistory(userId.value);
+  if (!withActionLock(actionLock, "attendanceLoad")) return;
+  try {
+    attendanceRows.value = await fetchAttendanceHistory(userId.value);
+  } catch (err) {
+    error.value = getApiErrorMessage(err, "Could not load attendance history.");
+  }
+  releaseActionLock(actionLock, "attendanceLoad");
 }
 
 async function lookupStanding() {
+  if (!withActionLock(actionLock, "lookup")) return;
   error.value = "";
   notice.value = "";
   if (!userId.value) {
     error.value = "Enter a user ID first.";
+    releaseActionLock(actionLock, "lookup");
     return;
   }
   try {
     standing.value = await fetchAccountStanding(userId.value);
     await loadAttendance();
   } catch (err) {
-    error.value = err?.response?.data?.error || "Could not fetch standing.";
+    error.value = getApiErrorMessage(err, "Could not fetch standing.");
   }
+  releaseActionLock(actionLock, "lookup");
 }
 
 async function savePolicy() {
+  if (!withActionLock(actionLock, "policy")) return;
   error.value = "";
   notice.value = "";
+  if (!policy.value?.id) {
+    error.value = "Standing policy is not loaded yet.";
+    releaseActionLock(actionLock, "policy");
+    return;
+  }
   try {
     const updated = await updateStandingPolicy(policy.value.id, {
       lookback_days: Number(policyForm.value.lookback_days),
@@ -95,13 +131,25 @@ async function savePolicy() {
     syncPolicyForm();
     notice.value = "Standing policy updated.";
   } catch (err) {
-    error.value = err?.response?.data?.error || "Could not update policy.";
+    error.value = getApiErrorMessage(err, "Could not update policy.");
   }
+  releaseActionLock(actionLock, "policy");
 }
 
 async function approveOverride() {
+  if (!withActionLock(actionLock, "override")) return;
   error.value = "";
   notice.value = "";
+  if (!overrideForm.value.user_id || !overrideForm.value.start_time || !overrideForm.value.end_time) {
+    error.value = "User ID, start time, and end time are required for overrides.";
+    releaseActionLock(actionLock, "override");
+    return;
+  }
+  if (!overrideForm.value.reason.trim()) {
+    error.value = "Reason is required for override approvals.";
+    releaseActionLock(actionLock, "override");
+    return;
+  }
   try {
     await createReservationOverride({
       user_id: overrideForm.value.user_id,
@@ -113,8 +161,9 @@ async function approveOverride() {
     notice.value = "Override approved.";
     await loadOverrides();
   } catch (err) {
-    error.value = err?.response?.data?.error || "Could not approve override.";
+    error.value = getApiErrorMessage(err, "Could not approve override.");
   }
+  releaseActionLock(actionLock, "override");
 }
 
 onMounted(async () => {
@@ -142,7 +191,9 @@ onMounted(async () => {
           <input v-model="userId" type="text" />
         </label>
       </div>
-      <button @click="lookupStanding">Calculate standing</button>
+      <button :disabled="hasActionInProgress" @click="lookupStanding">
+        {{ actionLock.lookup ? "Calculating..." : "Calculate standing" }}
+      </button>
       <div v-if="standing" class="result-block">
         <p>Standing score: {{ standing.standing_score }}</p>
         <p>
@@ -200,7 +251,9 @@ onMounted(async () => {
           <input v-model="policyForm.peak_end_time" type="time" step="1" />
         </label>
       </div>
-      <button type="submit">Save policy</button>
+      <button :disabled="hasActionInProgress" type="submit">
+        {{ actionLock.policy ? "Saving..." : "Save policy" }}
+      </button>
     </form>
 
     <form class="panel" @submit.prevent="approveOverride">
@@ -227,12 +280,16 @@ onMounted(async () => {
           <input v-model="overrideForm.reason" type="text" />
         </label>
       </div>
-      <button type="submit">Approve override</button>
+      <button :disabled="hasActionInProgress" type="submit">
+        {{ actionLock.override ? "Approving..." : "Approve override" }}
+      </button>
     </form>
 
     <div class="panel">
       <h3>Overrides</h3>
-      <button class="secondary" @click="loadOverrides">Refresh list</button>
+      <button class="secondary" :disabled="hasActionInProgress" @click="loadOverrides">
+        Refresh list
+      </button>
       <div class="table-wrap">
         <table>
           <thead>
@@ -261,7 +318,7 @@ onMounted(async () => {
 
     <div class="panel">
       <h3>Attendance History</h3>
-      <button class="secondary" @click="loadAttendance">
+      <button class="secondary" :disabled="hasActionInProgress" @click="loadAttendance">
         Refresh attendance
       </button>
       <div class="table-wrap">

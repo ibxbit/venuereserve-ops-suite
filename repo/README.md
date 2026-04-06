@@ -18,6 +18,13 @@ docker compose up
 
 This single command starts all declared dependencies (MySQL, backend, frontend), waits for database readiness, runs migrations automatically, and starts the app services.
 
+For Docker first-run, bootstrap also runs automatically and seeds:
+
+- baseline resources (`Studio Room A`, `Studio Room B`)
+- one manager account (`manager@local.test`)
+
+Default local bootstrap password in Compose is `LocalManagerPass123!` and should be changed after first login in real environments.
+
 ## Service Address (Services List)
 
 - Frontend (Vue): `http://localhost:5173`
@@ -28,8 +35,16 @@ This single command starts all declared dependencies (MySQL, backend, frontend),
 
 ```text
 repo/
-├── unit_tests/
+├── backend/
+│   ├── migrations/
+│   ├── src/
+│   └── tests/
+├── frontend/
+│   ├── src/
+│   └── dist/
 ├── API_tests/
+├── unit_tests/
+├── docker-compose.yml
 └── run_tests.sh
 ```
 
@@ -97,6 +112,26 @@ Create the database manually (example name: `studio_local`) and run:
 ```bash
 npm run migrate
 ```
+
+### 3.1) Run one-time bootstrap (required on clean DB)
+
+Set bootstrap env values and run:
+
+```bash
+# Linux/macOS
+BOOTSTRAP_ADMIN_EMAIL=manager@local.test \
+BOOTSTRAP_ADMIN_PASSWORD='ChooseAStrongPassword!' \
+npm run bootstrap --workspace backend
+```
+
+```powershell
+# Windows PowerShell
+$env:BOOTSTRAP_ADMIN_EMAIL = "manager@local.test"
+$env:BOOTSTRAP_ADMIN_PASSWORD = "ChooseAStrongPassword!"
+npm run bootstrap --workspace backend
+```
+
+The bootstrap script is idempotent and safe to re-run.
 
 ### 4) Start services (two terminals)
 
@@ -195,6 +230,7 @@ For LAN usage, keep backend `HOST=0.0.0.0` and Vite server host is already `0.0.
 - Commerce catalog endpoint: `GET /api/v1/commerce/catalog`.
 - Coupon list endpoint: `GET /api/v1/commerce/coupons`.
 - Real-time cart quote endpoint: `POST /api/v1/commerce/cart/quote`.
+  - Supports standard catalog `items` and `reservation_lines` in one payload.
 - Checkout endpoint with split/merge mode: `POST /api/v1/commerce/checkout`.
   - `split_mode=auto_split` creates separate orders by fulfillment path.
   - `split_mode=merge_all` creates one merged order.
@@ -209,6 +245,12 @@ For LAN usage, keep backend `HOST=0.0.0.0` and Vite server host is already `0.0.
   - `$10 off purchases over $75` (`SAVE10OVER75`)
   - `15% off class pack, max $25` (`CLASSPACK15`)
 
+Availability-to-checkout flow:
+
+- From `Availability Browser`, create a reservation from an available requested slot.
+- This stores a checkout draft reservation line.
+- Open `Unified Cart & Checkout` to see the reservation line merged with catalog items.
+
 ## Order state machine, idempotency, and local payments
 
 - Orders now use explicit state transitions:
@@ -217,8 +259,9 @@ For LAN usage, keep backend `HOST=0.0.0.0` and Vite server host is already `0.0.
 - Client idempotency keys are required for write operations (checkout/pay/cancel/transition/split/merge).
   - Provide via `x-idempotency-key` header or `idempotency_key` in request body.
 - Unpaid orders auto-expire after 15 minutes using:
-  - `POST /api/v1/commerce/orders/expire-unpaid`
-  - this releases inventory/reservation holds.
+  - automatic background worker sweep (runs every minute by default)
+  - optional manual trigger: `POST /api/v1/commerce/orders/expire-unpaid`
+  - both paths release inventory/reservation holds and are idempotent.
 - Supported local payment methods only:
   - `cash`
   - `card_terminal`
@@ -260,6 +303,8 @@ For LAN usage, keep backend `HOST=0.0.0.0` and Vite server host is already `0.0.
 - Sensitive APIs support optional anti-replay request timestamps using
   `x-request-timestamp` within configured window.
 - Permission changes are tracked with complete audit trail:
+  - only manager role with `security.permissions.manage` may update permissions
+  - self-grant of privileged permissions is explicitly denied
   - `PUT /api/v1/security/users/:id/permissions`
 - Fine issuance and refund processing are auditable and financial-log backed:
   - `POST /api/v1/fines`
@@ -270,3 +315,15 @@ For LAN usage, keep backend `HOST=0.0.0.0` and Vite server host is already `0.0.
   - `POST /api/v1/reconciliation/shift-close`
   - `GET /api/v1/reconciliation/shift/:shiftKey`
 - Variance flag is raised when drawer counted total differs from expected by more than `$5.00`.
+
+## Remaining scope exclusions and limitations
+
+- CAPTCHA is a local arithmetic challenge designed for audit/testing; it is not a production anti-bot service.
+- Tamper-evident verification in the frontend flags hash-chain continuity issues from retrieved rows, but does not recompute server-side payload hashes in-browser.
+- Real-time dashboards and audit browsers are polling/refresh-based; no websocket push channel is implemented in this slice.
+- Some moderation/security settings are surfaced read-only for lower-privilege roles due RBAC constraints.
+
+## Frontend Static Audit Mapping
+
+- Detailed requirement-to-file and requirement-to-test mapping is documented in:
+  - `frontend/docs/frontend-static-audit-mapping.md`

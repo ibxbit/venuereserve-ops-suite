@@ -2,9 +2,17 @@
 import { computed, onMounted, ref } from "vue";
 import {
   createBookingException,
+  createEntity,
   fetchAvailability,
   fetchList,
 } from "../services/api.js";
+import {
+  getApiErrorMessage,
+  hasActiveAction,
+  releaseActionLock,
+  validateReservationRequestForm,
+  withActionLock,
+} from "../utils/client-helpers.js";
 
 const resources = ref([]);
 const rows = ref([]);
@@ -16,6 +24,12 @@ const notice = ref("");
 const loading = ref(false);
 const exceptionReason = ref("");
 const requestedExceptionId = ref("");
+const RESERVATION_DRAFT_KEY = "studio-reservation-cart-draft";
+const actionLock = ref({
+  browse: false,
+  exception: false,
+  addToCheckout: false,
+});
 
 const form = ref({
   resource_id: "",
@@ -29,6 +43,32 @@ const conflictRows = computed(() =>
   rows.value.filter((slot) => !slot.available),
 );
 
+const selectedResource = computed(() => {
+  return (
+    resources.value.find((resource) => resource.id === form.value.resource_id) ||
+    null
+  );
+});
+
+const policyNotes = computed(() => {
+  if (!selectedResource.value) return [];
+  const resource = selectedResource.value;
+  return [
+    `Booking window: ${Number(resource.booking_window_days || 30)} day(s)`,
+    `Duration: ${Number(resource.min_duration_minutes || 30)}-${Number(resource.max_duration_minutes || 240)} minutes`,
+    `Slot stitching: ${resource.allow_slot_stitching ? "enabled" : "disabled"}`,
+    `Early check-in: ${Number(resource.early_check_in_minutes || 10)} minutes`,
+    `Late grace before no-show: ${Number(resource.late_check_in_grace_minutes || 15)} minutes`,
+  ];
+});
+
+const hasActionInProgress = computed(() => hasActiveAction(actionLock));
+
+const browseButtonLabel = computed(() => {
+  if (actionLock.value.browse) return "Browsing...";
+  return "Browse availability";
+});
+
 async function loadResources() {
   const result = await fetchList("resources");
   resources.value = result.data || [];
@@ -38,8 +78,24 @@ async function loadResources() {
 }
 
 async function browse() {
+  if (!withActionLock(actionLock, "browse")) return;
+
+  const formErrors = validateReservationRequestForm(
+    form.value,
+    selectedResource.value,
+  );
+  if (!form.value.resource_id) {
+    formErrors.unshift("Select a resource first.");
+  }
+  if (formErrors.length) {
+    errorMessage.value = formErrors.join(" ");
+    releaseActionLock(actionLock, "browse");
+    return;
+  }
+
   if (!form.value.resource_id) {
     errorMessage.value = "Select a resource first.";
+    releaseActionLock(actionLock, "browse");
     return;
   }
 
@@ -59,20 +115,17 @@ async function browse() {
     requested.value = data.requested;
     dayRule.value = data.day_rule || null;
   } catch (error) {
-    const details = error?.response?.data?.details;
-    if (Array.isArray(details) && details.length) {
-      errorMessage.value = details.map((item) => item.message).join(" ");
-    } else {
-      errorMessage.value =
-        error?.response?.data?.error ||
-        "Could not load availability from local API.";
-    }
+    errorMessage.value = getApiErrorMessage(
+      error,
+      "Could not load availability from local API.",
+    );
     rows.value = [];
     alternatives.value = [];
     requested.value = null;
     dayRule.value = null;
   }
   loading.value = false;
+  releaseActionLock(actionLock, "browse");
 }
 
 function applyAlternative(isoTime) {
@@ -81,13 +134,17 @@ function applyAlternative(isoTime) {
 }
 
 async function requestException() {
+  if (!withActionLock(actionLock, "exception")) return;
+
   if (!requested.value || requested.value.available) {
     errorMessage.value =
       "Only conflicting requested slots can be sent for exception approval.";
+    releaseActionLock(actionLock, "exception");
     return;
   }
   if (!exceptionReason.value.trim()) {
     errorMessage.value = "Enter reason text for manager approval.";
+    releaseActionLock(actionLock, "exception");
     return;
   }
 
@@ -110,9 +167,51 @@ async function requestException() {
     notice.value = `Exception request submitted (${created.id}). Waiting manager decision.`;
     exceptionReason.value = "";
   } catch (error) {
-    errorMessage.value =
-      error?.response?.data?.error || "Could not submit exception request.";
+    errorMessage.value = getApiErrorMessage(
+      error,
+      "Could not submit exception request.",
+    );
   }
+  releaseActionLock(actionLock, "exception");
+}
+
+async function addRequestedReservationToCheckout() {
+  if (!withActionLock(actionLock, "addToCheckout")) return;
+
+  if (!requested.value || !requested.value.available) {
+    errorMessage.value = "Requested slot must be available before adding to checkout.";
+    releaseActionLock(actionLock, "addToCheckout");
+    return;
+  }
+
+  errorMessage.value = "";
+  try {
+    const created = await createEntity("reservations", {
+      user_id: form.value.user_id,
+      resource_id: form.value.resource_id,
+      start_time: requested.value.start_time,
+      end_time: requested.value.end_time,
+    });
+    if (!created.data?.id) {
+      errorMessage.value = "Could not create reservation from requested slot.";
+      return;
+    }
+
+    localStorage.setItem(
+      RESERVATION_DRAFT_KEY,
+      JSON.stringify({
+        user_id: form.value.user_id,
+        reservation_lines: [{ reservation_id: created.data.id }],
+      }),
+    );
+    notice.value = `Reservation ${created.data.id} created and added to checkout draft.`;
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(
+      error,
+      "Could not create reservation for checkout.",
+    );
+  }
+  releaseActionLock(actionLock, "addToCheckout");
 }
 
 onMounted(async () => {
@@ -168,8 +267,19 @@ onMounted(async () => {
           />
         </label>
       </div>
-      <button type="submit">Browse availability</button>
+      <button :disabled="hasActionInProgress" type="submit">
+        {{ browseButtonLabel }}
+      </button>
     </form>
+
+    <div v-if="selectedResource" class="panel">
+      <h3>Reservation Rules</h3>
+      <ul class="plain-list">
+        <li v-for="note in policyNotes" :key="note">
+          {{ note }}
+        </li>
+      </ul>
+    </div>
 
     <p v-if="loading" class="badge">
       <span class="spinner" />
@@ -211,9 +321,18 @@ onMounted(async () => {
       <button
         v-if="requested && !requested.available"
         type="button"
+        :disabled="hasActionInProgress"
         @click="requestException"
       >
-        Request manager exception
+        {{ actionLock.exception ? "Submitting exception..." : "Request manager exception" }}
+      </button>
+      <button
+        v-if="requested && requested.available"
+        type="button"
+        :disabled="hasActionInProgress"
+        @click="addRequestedReservationToCheckout"
+      >
+        {{ actionLock.addToCheckout ? "Adding to checkout..." : "Add requested slot to checkout" }}
       </button>
       <p v-if="requestedExceptionId">Request ID: {{ requestedExceptionId }}</p>
     </div>

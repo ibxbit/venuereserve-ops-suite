@@ -1,5 +1,6 @@
 import Router from "@koa/router";
 import { randomUUID } from "crypto";
+import { allPermissionKeys, isManagerRole } from "../auth/roles.js";
 import { db } from "../db.js";
 import { antiReplay } from "../middleware/anti-replay.js";
 import { requirePermission } from "../middleware/authorize.js";
@@ -30,6 +31,24 @@ function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (Number.isNaN(parsed) || parsed <= 0) return fallback;
   return parsed;
+}
+
+const privilegedPermissionPrefixes = ["reports."];
+const privilegedPermissions = new Set([
+  "users.write",
+  "resources.write",
+  "orders.write",
+  "refunds.write",
+  "audit.read",
+  "community.moderate",
+  "security.permissions.manage",
+]);
+
+function isPrivilegedPermission(permissionKey) {
+  if (privilegedPermissions.has(permissionKey)) return true;
+  return privilegedPermissionPrefixes.some((prefix) =>
+    permissionKey.startsWith(prefix),
+  );
 }
 
 export const securityRouter = new Router();
@@ -199,8 +218,12 @@ securityRouter.get(
 
 securityRouter.put(
   "/security/users/:id/permissions",
-  requirePermission("users.write"),
+  requirePermission("security.permissions.manage"),
   async (ctx) => {
+    if (!isManagerRole(ctx.state.actorRole)) {
+      ctx.throw(403, "only managers can change user permissions");
+    }
+
     const user = await db("users").where({ id: ctx.params.id }).first();
     if (!user) {
       ctx.throw(404, "user not found");
@@ -211,9 +234,22 @@ securityRouter.put(
       "permission_key",
       { max: 120 },
     );
+    if (!allPermissionKeys.includes(permissionKey)) {
+      ctx.throw(400, "permission_key is not recognized");
+    }
+
     const isAllowed = Boolean(ctx.request.body?.is_allowed);
     const actor = ctx.state.actorUserId || null;
     const now = new Date();
+
+    if (
+      actor &&
+      actor === user.id &&
+      isAllowed &&
+      isPrivilegedPermission(permissionKey)
+    ) {
+      ctx.throw(403, "self-grant of privileged permissions is not allowed");
+    }
 
     const existing = await db("user_permissions")
       .where({ user_id: user.id, permission_key: permissionKey })

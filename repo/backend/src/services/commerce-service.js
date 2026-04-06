@@ -153,8 +153,11 @@ export function validateCartInput(input) {
     error.status = 400;
     throw error;
   }
-  if (!Array.isArray(input.items) || input.items.length === 0) {
-    const error = new Error("items is required");
+  const hasCatalogItems = Array.isArray(input.items) && input.items.length > 0;
+  const hasReservationLines =
+    Array.isArray(input.reservation_lines) && input.reservation_lines.length > 0;
+  if (!hasCatalogItems && !hasReservationLines) {
+    const error = new Error("at least one cart item or reservation line is required");
     error.status = 400;
     throw error;
   }
@@ -204,43 +207,37 @@ export async function withIdempotency({
 export async function buildQuote(input, db = defaultDb) {
   validateCartInput(input);
 
-  const requestedItems = input.items
+  const requestedItems = Array.isArray(input.items)
+    ? input.items
     .map((item) => ({
       catalog_item_id: String(item.catalog_item_id || "").trim(),
       quantity: Math.max(1, Number(item.quantity || 1)),
     }))
-    .filter((item) => item.catalog_item_id);
+    .filter((item) => item.catalog_item_id)
+    : [];
 
-  if (!requestedItems.length) {
-    const error = new Error("at least one valid catalog_item_id is required");
-    error.status = 400;
-    throw error;
-  }
-
-  const itemIds = [
-    ...new Set(requestedItems.map((item) => item.catalog_item_id)),
-  ];
-  const catalogRows = await db("catalog_items")
-    .whereIn("id", itemIds)
-    .andWhere({ is_active: true });
+  const itemIds = [...new Set(requestedItems.map((item) => item.catalog_item_id))];
+  const catalogRows = itemIds.length
+    ? await db("catalog_items").whereIn("id", itemIds).andWhere({ is_active: true })
+    : [];
   const catalogMap = new Map(catalogRows.map((row) => [row.id, row]));
 
   const missing = itemIds.filter((id) => !catalogMap.has(id));
   if (missing.length) {
-    const error = new Error(
-      `catalog items not found or inactive: ${missing.join(", ")}`,
-    );
+    const error = new Error(`catalog items not found or inactive: ${missing.join(", ")}`);
     error.status = 400;
     throw error;
   }
 
-  let lines = requestedItems.map((item, index) => {
+  const catalogLines = requestedItems.map((item, index) => {
     const catalog = catalogMap.get(item.catalog_item_id);
     const unitPrice = toNumber(catalog.base_price);
     const subtotal = toMoney(unitPrice * item.quantity);
     return {
-      line_key: `${index}-${catalog.id}`,
+      line_key: `catalog-${index}-${catalog.id}`,
+      line_type: "catalog",
       catalog_item_id: catalog.id,
+      reservation_id: null,
       sku: catalog.sku,
       item_name: catalog.name,
       category: catalog.category,
@@ -252,6 +249,83 @@ export async function buildQuote(input, db = defaultDb) {
       fulfillment_path: catalog.fulfillment_path,
     };
   });
+
+  const requestedReservationLines = Array.isArray(input.reservation_lines)
+    ? input.reservation_lines
+        .map((line) => ({
+          reservation_id: String(line?.reservation_id || "").trim(),
+        }))
+        .filter((line) => line.reservation_id)
+    : [];
+
+  const reservationIds = [
+    ...new Set(requestedReservationLines.map((line) => line.reservation_id)),
+  ];
+
+  const reservationRows = reservationIds.length
+    ? await db("reservations").whereIn("id", reservationIds)
+    : [];
+  const reservationMap = new Map(reservationRows.map((row) => [row.id, row]));
+
+  const resourceIds = [
+    ...new Set(reservationRows.map((row) => row.resource_id).filter(Boolean)),
+  ];
+  const resourceRows = resourceIds.length
+    ? await db("resources").whereIn("id", resourceIds)
+    : [];
+  const resourceMap = new Map(resourceRows.map((row) => [row.id, row]));
+
+  const missingReservations = reservationIds.filter((id) => !reservationMap.has(id));
+  if (missingReservations.length) {
+    const error = new Error(
+      `reservation lines not found: ${missingReservations.join(", ")}`,
+    );
+    error.status = 400;
+    throw error;
+  }
+
+  const reservationLines = requestedReservationLines.map((line, index) => {
+    const reservation = reservationMap.get(line.reservation_id);
+    if (reservation.user_id !== input.user_id) {
+      const error = new Error(
+        `reservation ${line.reservation_id} does not belong to user ${input.user_id}`,
+      );
+      error.status = 403;
+      throw error;
+    }
+    if (!["booked", "checked_in"].includes(String(reservation.status || ""))) {
+      const error = new Error(
+        `reservation ${line.reservation_id} is not eligible for checkout`,
+      );
+      error.status = 409;
+      throw error;
+    }
+
+    const resourceName =
+      resourceMap.get(reservation.resource_id)?.name || reservation.resource_id;
+    return {
+      line_key: `reservation-${index}-${reservation.id}`,
+      line_type: "reservation",
+      catalog_item_id: null,
+      reservation_id: reservation.id,
+      sku: null,
+      item_name: `Reservation: ${resourceName}`,
+      category: "reservation",
+      quantity: 1,
+      unit_price: 0,
+      subtotal_amount: 0,
+      discount_amount: 0,
+      total_amount: 0,
+      fulfillment_path: fulfillmentPaths.PICKUP,
+      metadata: {
+        resource_id: reservation.resource_id,
+        start_time: reservation.start_time,
+        end_time: reservation.end_time,
+      },
+    };
+  });
+
+  let lines = [...catalogLines, ...reservationLines];
 
   const subtotalAmount = toMoney(
     lines.reduce((sum, line) => sum + line.subtotal_amount, 0),
@@ -381,6 +455,7 @@ export async function transitionOrderState({
 }
 
 export async function reserveInventoryHold({ trx, orderId, line }) {
+  if (!line.catalog_item_id) return;
   const catalog = await trx("catalog_items")
     .where({ id: line.catalog_item_id })
     .first();

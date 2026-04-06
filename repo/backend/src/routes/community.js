@@ -210,16 +210,16 @@ communityRouter.get(
     const authorId = normalizeText(ctx.query.author_id || "");
     const status = normalizeText(ctx.query.status || "") || "published";
 
-    const posts = await db("community_posts")
+    const postsQuery = db("community_posts")
       .where({ status })
       .whereNull("parent_post_id")
-      .orderBy("created_at", "desc")
-      .limit(perPage)
-      .offset(offset);
+      .orderBy("created_at", "desc");
 
     if (authorId) {
-      posts.where({ user_id: authorId });
+      postsQuery.where({ user_id: authorId });
     }
+
+    const posts = await postsQuery.limit(perPage).offset(offset);
 
     const totalQuery = db("community_posts")
       .count({ total: "id" })

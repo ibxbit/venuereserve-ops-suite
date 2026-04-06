@@ -52,6 +52,7 @@ const rolePermissionMatrix = {
     "community.write",
     "community.report",
     "community.moderate",
+    "security.permissions.manage",
   ],
   [roles.MODERATOR]: [
     "users.read",
@@ -74,6 +75,10 @@ const rolePermissionMatrix = {
     "community.read",
   ],
 };
+
+export const allPermissionKeys = [
+  ...new Set(Object.values(rolePermissionMatrix).flat()),
+].sort();
 
 const roleDashboards = {
   [roles.MEMBER]: {

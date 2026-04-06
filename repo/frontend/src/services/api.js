@@ -222,6 +222,61 @@ export async function fetchReport(type) {
   return response.data;
 }
 
+export async function fetchAuditTrails({
+  page = 1,
+  perPage = 20,
+  entity = "",
+  action = "",
+  actorUserId = "",
+} = {}) {
+  const params = {
+    page,
+    per_page: perPage,
+  };
+  if (entity) params.entity = entity;
+  if (action) params.action = action;
+  if (actorUserId) params.actor_user_id = actorUserId;
+
+  const response = await api.get("/audit-trails", { params });
+  return response.data;
+}
+
+export async function fetchSecurityEvents({
+  page = 1,
+  perPage = 20,
+  severity = "",
+  eventType = "",
+} = {}) {
+  const params = {
+    page,
+    per_page: perPage,
+  };
+  if (severity) params.severity = severity;
+  if (eventType) params.event_type = eventType;
+
+  const response = await api.get("/security/events", { params });
+  return response.data;
+}
+
+export async function fetchDailyReconciliation(date) {
+  const response = await api.get("/reconciliation/daily", {
+    params: { date },
+  });
+  return response.data;
+}
+
+export async function submitShiftClose(payload) {
+  const response = await api.post("/reconciliation/shift-close", payload);
+  return response.data;
+}
+
+export async function fetchShiftReconciliation(shiftKey) {
+  const response = await api.get(
+    `/reconciliation/shift/${encodeURIComponent(shiftKey)}`,
+  );
+  return response.data;
+}
+
 export async function checkInReservation(id) {
   try {
     const response = await api.post(`/reservations/${id}/check-in`);

@@ -69,6 +69,11 @@ const navItems = [
     permission: "reports.financial",
   },
   {
+    to: "/operations-audit",
+    label: "Ops Audit",
+    permission: "reports.financial",
+  },
+  {
     to: "/security-events",
     label: "Security Events",
     permission: "reports.security",

@@ -223,6 +223,7 @@ function seedBase() {
     ],
     security_events: [],
     cash_drawer_counts: [],
+    user_permissions: [],
   };
 }
 
@@ -301,6 +302,46 @@ describe("critical business/API flows", () => {
     expect(first.body.state).toBe(second.body.state);
   });
 
+  test("reservation lines can be quoted and checked out in unified cart", async () => {
+    const { createApp } = await import("../../src/app.js");
+    const app = createApp().callback();
+
+    const reservation = {
+      id: "res-a",
+      user_id: "member-a",
+      resource_id: "room-1",
+      start_time: new Date(Date.now() + 4 * 60 * 60000),
+      end_time: new Date(Date.now() + 5 * 60 * 60000),
+      status: "booked",
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    fakeDb.__state.reservations.push(reservation);
+
+    const quote = await request(app)
+      .post("/api/v1/commerce/cart/quote")
+      .set("Authorization", `Bearer ${TOKENS.memberA}`)
+      .send({
+        user_id: "member-a",
+        reservation_lines: [{ reservation_id: reservation.id }],
+      });
+    expect(quote.status).toBe(200);
+    expect(quote.body.lines.some((line) => line.category === "reservation")).toBe(
+      true,
+    );
+
+    const checkout = await request(app)
+      .post("/api/v1/commerce/checkout")
+      .set("Authorization", `Bearer ${TOKENS.memberA}`)
+      .send({
+        idempotency_key: "checkout-reservation-1",
+        user_id: "member-a",
+        reservation_lines: [{ reservation_id: reservation.id }],
+      });
+    expect(checkout.status).toBe(201);
+    expect(checkout.body.orders.length).toBeGreaterThan(0);
+  });
+
   test("expire unpaid sweep marks overdue pending orders", async () => {
     const { createApp } = await import("../../src/app.js");
     const app = createApp().callback();
@@ -331,6 +372,42 @@ describe("critical business/API flows", () => {
       .send({ content: "post-11", device_fingerprint: "dev-a" });
 
     expect(blocked.status).toBe(429);
+  });
+
+  test("community feed author filter only returns selected author posts", async () => {
+    fakeDb.__state.community_posts.push(
+      {
+        id: "post-a",
+        user_id: "member-a",
+        parent_post_id: null,
+        content: "alpha",
+        status: "published",
+        flag_count: 0,
+        created_at: new Date("2026-03-27T10:00:00Z"),
+        updated_at: new Date("2026-03-27T10:00:00Z"),
+      },
+      {
+        id: "post-b",
+        user_id: "member-b",
+        parent_post_id: null,
+        content: "beta",
+        status: "published",
+        flag_count: 0,
+        created_at: new Date("2026-03-27T10:01:00Z"),
+        updated_at: new Date("2026-03-27T10:01:00Z"),
+      },
+    );
+
+    const { createApp } = await import("../../src/app.js");
+    const app = createApp().callback();
+    const response = await request(app)
+      .get("/api/v1/community/feed")
+      .set("Authorization", `Bearer ${TOKENS.memberA}`)
+      .query({ author_id: "member-a" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.length).toBe(1);
+    expect(response.body.data[0].user_id).toBe("member-a");
   });
 
   test("reconciliation shift-close flags variance over $5", async () => {

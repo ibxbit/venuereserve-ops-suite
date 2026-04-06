@@ -25,6 +25,7 @@ import {
   withIdempotency,
 } from "../services/commerce-service.js";
 import { appendFinancialLog } from "../services/financial-log-service.js";
+import { expireUnpaidOrders as runOrderExpirySweep } from "../services/order-expiry-worker.js";
 
 function assertIdempotencyKey(ctx, operation) {
   const key =
@@ -176,7 +177,12 @@ commerceRouter.post(
                 discount_amount: line.discount_amount,
                 total_amount: line.total_amount,
                 fulfillment_path: line.fulfillment_path,
-                metadata_json: JSON.stringify({ sku: line.sku }),
+                metadata_json: JSON.stringify({
+                  sku: line.sku,
+                  line_type: line.line_type || "catalog",
+                  reservation_id: line.reservation_id || null,
+                  ...(line.metadata || {}),
+                }),
                 created_at: now,
                 updated_at: now,
               });
@@ -184,10 +190,19 @@ commerceRouter.post(
               await reserveInventoryHold({ trx, orderId, line });
             }
 
+            const reservationLineIds = quote.lines
+              .filter((line) => line.reservation_id)
+              .map((line) => line.reservation_id);
+
             await reserveReservationHolds({
               trx,
               orderId,
-              reservationHoldIds: scopedInput.reservation_hold_ids,
+              reservationHoldIds: [
+                ...(Array.isArray(scopedInput.reservation_hold_ids)
+                  ? scopedInput.reservation_hold_ids
+                  : []),
+                ...reservationLineIds,
+              ],
             });
 
             await createStateEvent({
@@ -428,39 +443,19 @@ commerceRouter.post(
   "/commerce/orders/expire-unpaid",
   requirePermission("orders.write"),
   async (ctx) => {
-    const now = new Date();
-    const targets = await db("orders")
-      .where({ state: orderStates.PENDING_PAYMENT })
-      .andWhere("expires_at", "<", now)
-      .orderBy("expires_at", "asc");
-
-    const expiredIds = [];
-    for (const order of targets) {
-      await db.transaction(async (trx) => {
-        await transitionOrderState({
-          trx,
-          order,
-          toState: orderStates.EXPIRED,
-          eventType: "auto_expire",
-          reason: "Unpaid for 15 minutes",
-          idempotencyKey: null,
-          actorUserId: ctx.state.actorUserId,
-          payload: {},
-        });
-        await releaseOrderHolds({ trx, orderId: order.id });
-      });
-      expiredIds.push(order.id);
-    }
+    const result = await runOrderExpirySweep({
+      actorUserId: ctx.state.actorUserId,
+    });
 
     await writeAudit({
       entity: "orders",
       entityId: "batch",
       action: "expire_unpaid",
-      payload: { count: expiredIds.length, ids: expiredIds },
+      payload: { count: result.expired_count, ids: result.order_ids },
       actorUserId: ctx.state.actorUserId,
     });
 
-    ctx.body = { expired_count: expiredIds.length, order_ids: expiredIds };
+    ctx.body = result;
   },
 );
 

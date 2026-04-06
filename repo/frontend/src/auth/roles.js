@@ -58,6 +58,7 @@ const rolePermissions = {
     "community.write",
     "community.report",
     "community.moderate",
+    "security.permissions.manage",
   ],
   [roles.MODERATOR]: [
     "users.read",

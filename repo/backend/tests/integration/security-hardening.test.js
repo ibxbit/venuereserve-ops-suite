@@ -490,4 +490,28 @@ describe("security hardening", () => {
       fakeDb.raw = originalRaw;
     }
   });
+
+  test("permission escalation is blocked for non-managers and self-grants", async () => {
+    const { createApp } = await import("../../src/app.js");
+    const app = createApp().callback();
+
+    const frontDeskDenied = await request(app)
+      .put("/api/v1/security/users/member-b/permissions")
+      .set("Authorization", `Bearer ${TOKENS.frontDesk}`)
+      .send({ permission_key: "users.write", is_allowed: true });
+    expect(frontDeskDenied.status).toBe(403);
+
+    const managerSelfGrantDenied = await request(app)
+      .put("/api/v1/security/users/manager-a/permissions")
+      .set("Authorization", `Bearer ${TOKENS.manager}`)
+      .send({ permission_key: "users.write", is_allowed: true });
+    expect(managerSelfGrantDenied.status).toBe(403);
+    expect(managerSelfGrantDenied.body.error).toContain("self-grant");
+
+    const managerToOtherAllowed = await request(app)
+      .put("/api/v1/security/users/member-b/permissions")
+      .set("Authorization", `Bearer ${TOKENS.manager}`)
+      .send({ permission_key: "community.read", is_allowed: true });
+    expect(managerToOtherAllowed.status).toBe(200);
+  });
 });

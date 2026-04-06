@@ -41,6 +41,13 @@ services:
       DB_NAME: studio_local
       DB_WAIT_RETRIES: 60
       DB_WAIT_DELAY_MS: 2000
+      BOOTSTRAP_AUTO_RUN: true
+      BOOTSTRAP_ADMIN_EMAIL: manager@local.test
+      BOOTSTRAP_ADMIN_FULL_NAME: Local Studio Manager
+      BOOTSTRAP_ADMIN_PASSWORD: LocalManagerPass123!
+      ORDER_EXPIRY_WORKER_ENABLED: true
+      ORDER_EXPIRY_INTERVAL_MS: 60000
+      ORDER_EXPIRY_BATCH_SIZE: 50
     depends_on:
       mysql:
         condition: service_healthy
