@@ -139,16 +139,17 @@ async function runCheckout() {
   error.value = "";
   message.value = "";
   try {
-    checkoutResult.value = await checkoutCommerceCart({
-      user_id: userId.value,
-      items: selectedItems.value,
-      reservation_lines: reservationLines.value,
-      coupon_code: couponCode.value || null,
-      split_mode: splitMode.value,
-      idempotency_key: makeIdempotencyKey("checkout"),
-    });
-    message.value =
-      "Checkout created. Complete payment before 15-minute expiry.";
+     checkoutResult.value = await checkoutCommerceCart({
+       user_id: userId.value,
+       items: selectedItems.value,
+       reservation_lines: reservationLines.value,
+       coupon_code: couponCode.value || null,
+       split_mode: splitMode.value,
+       idempotency_key: makeIdempotencyKey("checkout"),
+     });
+     message.value =
+       "Checkout created. Complete payment before 15-minute expiry.";
+     localStorage.removeItem(RESERVATION_DRAFT_KEY);
   } catch (err) {
     error.value = getApiErrorMessage(err, "Checkout failed.");
   }
@@ -261,6 +262,15 @@ watch(
   [quantities, couponCode, userId, reservationLines],
   async () => {
     await recalcQuote();
+
+    // Sync back to localStorage for persistence
+    const draft = {
+      user_id: userId.value,
+      reservation_lines: reservationLines.value.map((line) => ({
+        reservation_id: line.reservation_id,
+      })),
+    };
+    localStorage.setItem(RESERVATION_DRAFT_KEY, JSON.stringify(draft));
   },
   { deep: true },
 );
@@ -278,11 +288,10 @@ onMounted(async () => {
       if (parsed?.user_id) {
         userId.value = String(parsed.user_id);
       }
-    } catch {
-      reservationLines.value = [];
+      } catch {
+        reservationLines.value = [];
+      }
     }
-    localStorage.removeItem(RESERVATION_DRAFT_KEY);
-  }
 
   catalog.value = await fetchCommerceCatalog();
   coupons.value = await fetchCommerceCoupons();
@@ -432,15 +441,15 @@ onMounted(async () => {
         </li>
       </ul>
 
-      <button :disabled="hasActionInProgress" @click="runCheckout">
+      <button :disabled="hasActionInProgress || actionLock.checkout" @click="runCheckout">
         {{ actionLock.checkout ? "Checking out..." : "Checkout" }}
       </button>
       <button
         class="secondary"
-        :disabled="hasActionInProgress"
+        :disabled="hasActionInProgress || actionLock.expire"
         @click="runExpireSweep"
       >
-        Expire unpaid 15m+
+        {{ actionLock.expire ? "Expiring..." : "Expire unpaid 15m+" }}
       </button>
 
       <h4>Coupon Allocation</h4>
@@ -484,7 +493,7 @@ onMounted(async () => {
           <input v-model="mergeOrderIdsText" type="text" />
         </label>
       </div>
-      <button class="secondary" :disabled="hasActionInProgress" @click="runMerge">
+      <button class="secondary" :disabled="hasActionInProgress || actionLock.merge" @click="runMerge">
         {{ actionLock.merge ? "Merging..." : "Merge orders" }}
       </button>
     </div>

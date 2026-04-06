@@ -334,41 +334,55 @@ async function load() {
   isOffline.value = result.offline;
 }
 
+const actionLock = ref({ add: false, delete: false });
+
 async function addRecord() {
-  const payload = normalizePayload(formState.value);
-  const result = await createEntity(props.entity, payload);
+  if (actionLock.value.add) return;
+  actionLock.value.add = true;
+  try {
+    const payload = normalizePayload(formState.value);
+    const result = await createEntity(props.entity, payload);
 
-  if (result.forbidden) {
-    queueNotice.value = "Current role cannot create records in this section.";
-    return;
+    if (result.forbidden) {
+      queueNotice.value = "Current role cannot create records in this section.";
+      return;
+    }
+
+    if (result.queued) {
+      queueNotice.value =
+        "Saved to local queue; will sync when API is reachable.";
+      const cached = getCachedList(props.entity);
+      const optimistic = [{ id: `local-${Date.now()}`, ...payload }, ...cached];
+      setCachedList(props.entity, optimistic);
+      rows.value = optimistic;
+    } else {
+      queueNotice.value = "";
+      await load();
+    }
+
+    formState.value = { ...(templateByEntity[props.entity] || {}) };
+  } finally {
+    actionLock.value.add = false;
   }
-
-  if (result.queued) {
-    queueNotice.value =
-      "Saved to local queue; will sync when API is reachable.";
-    const cached = getCachedList(props.entity);
-    const optimistic = [{ id: `local-${Date.now()}`, ...payload }, ...cached];
-    setCachedList(props.entity, optimistic);
-    rows.value = optimistic;
-  } else {
-    queueNotice.value = "";
-    await load();
-  }
-
-  formState.value = { ...(templateByEntity[props.entity] || {}) };
 }
 
 async function removeRecord(id) {
-  const result = await deleteEntity(props.entity, id);
-  if (result.forbidden) {
-    queueNotice.value = "Current role cannot delete records in this section.";
-    return;
+  if (actionLock.value.delete) return;
+  actionLock.value.delete = true;
+  try {
+    const result = await deleteEntity(props.entity, id);
+    if (result.forbidden) {
+      queueNotice.value = "Current role cannot delete records in this section.";
+      return;
+    }
+    if (result.queued) {
+      queueNotice.value = "Delete operation queued for later sync.";
+    }
+    rows.value = rows.value.filter((row) => row.id !== id);
+    setCachedList(props.entity, rows.value);
+  } finally {
+    actionLock.value.delete = false;
   }
-  if (result.queued) {
-    queueNotice.value = "Delete operation queued for later sync.";
-  }
-  rows.value = rows.value.filter((row) => row.id !== id);
-  setCachedList(props.entity, rows.value);
 }
 
 async function runCheckIn(id) {
@@ -441,7 +455,7 @@ onBeforeUnmount(() => {
           <input v-else v-model="formState[field]" type="checkbox" />
         </label>
       </div>
-      <button type="submit">Save</button>
+      <button type="submit" :disabled="actionLock.add">{{ actionLock.add ? "Saving..." : "Save" }}</button>
     </form>
 
     <div v-if="canCheckInReservations" class="panel">
@@ -476,8 +490,9 @@ onBeforeUnmount(() => {
                   v-if="canWrite"
                   class="danger"
                   @click="removeRecord(row.id)"
+                  :disabled="actionLock.delete"
                 >
-                  Delete
+                  {{ actionLock.delete ? "Deleting..." : "Delete" }}
                 </button>
               </td>
             </tr>

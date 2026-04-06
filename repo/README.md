@@ -56,7 +56,20 @@ From the `repo` directory:
 ./run_tests.sh
 ```
 
-This script is idempotent, non-interactive, and runs tests in the backend Docker container (Node 20) via `docker compose exec -T backend ...`.
+This script is idempotent,  log "All tests completed successfully in backend container."
+else
+  log "Docker Compose is unavailable. Falling back to host execution."
+  run_host_tests
+  log "All tests completed successfully on host."
+fi
+
+## Unified Full Suite Runner
+
+To run both backend (standard + security) and frontend tests together:
+
+```bash
+./run_all_tests.sh
+```
 
 Behavior:
 
@@ -117,7 +130,6 @@ npm run migrate
 
 Set bootstrap env values and run:
 
-```bash
 # Linux/macOS
 BOOTSTRAP_ADMIN_EMAIL=manager@local.test \
 BOOTSTRAP_ADMIN_PASSWORD='ChooseAStrongPassword!' \
@@ -234,9 +246,13 @@ For LAN usage, keep backend `HOST=0.0.0.0` and Vite server host is already `0.0.
 - Checkout endpoint with split/merge mode: `POST /api/v1/commerce/checkout`.
   - `split_mode=auto_split` creates separate orders by fulfillment path.
   - `split_mode=merge_all` creates one merged order.
-- Post-checkout operations:
+- Post-checkout operations (state transitions, split, merge):
   - `POST /api/v1/commerce/orders/:id/split`
   - `POST /api/v1/commerce/orders/merge`
+  - `POST /api/v1/commerce/orders/:id/transition`
+- Order viewing (read-only):
+  - `GET /api/v1/orders` (Members see self-owned, Managers see all)
+  - `GET /api/v1/orders/:id` (Ownership enforced)
 - Coupon rules support fixed and percentage discounts with:
   - minimum subtotal threshold
   - category targeting (e.g., class packs)
@@ -306,9 +322,11 @@ Availability-to-checkout flow:
   - only manager role with `security.permissions.manage` may update permissions
   - self-grant of privileged permissions is explicitly denied
   - `PUT /api/v1/security/users/:id/permissions`
+  - `GET /api/v1/user-permissions` (List/Browse)
 - Fine issuance and refund processing are auditable and financial-log backed:
   - `POST /api/v1/fines`
   - `POST /api/v1/refunds/:id/process`
+  - `GET /api/v1/financial-logs` (List/Browse, Read only)
 - Financial logs are tamper-evident with chained hashes in `financial_logs`.
 - Reconciliation APIs:
   - `GET /api/v1/reconciliation/daily?date=YYYY-MM-DD`

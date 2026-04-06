@@ -57,6 +57,61 @@ function resolveActorScopedUserId(ctx, requestedUserId) {
   return actorUserId;
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+commerceRouter.get(
+  "/orders",
+  requirePermission("orders.read"),
+  async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+    const userId = ctx.query.user_id;
+
+    const query = db("orders").orderBy("created_at", "desc");
+    const countQuery = db("orders").count({ total: "id" });
+
+    if (ctx.state.actorRole === "member") {
+      query.where({ user_id: ctx.state.actorUserId });
+      countQuery.where({ user_id: ctx.state.actorUserId });
+    } else if (userId) {
+      query.where({ user_id: userId });
+      countQuery.where({ user_id: userId });
+    }
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
+  },
+);
+
+commerceRouter.get(
+  "/orders/:id",
+  requirePermission("orders.read"),
+  async (ctx) => {
+    const row = await db("orders").where({ id: ctx.params.id }).first();
+    if (!row) {
+      ctx.throw(404, "order not found");
+    }
+    assertOwnerOrStaff(ctx, row.user_id);
+    ctx.body = row;
+  },
+);
+
 commerceRouter.get(
   "/commerce/catalog",
   requirePermission("orders.read"),

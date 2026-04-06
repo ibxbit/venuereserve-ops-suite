@@ -300,6 +300,92 @@ securityRouter.put(
   },
 );
 
+securityRouter.get(
+  "/user-permissions",
+  requirePermission("users.read"),
+  async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+    const userId = ctx.query.user_id;
+
+    const query = db("user_permissions").orderBy("created_at", "desc");
+    const countQuery = db("user_permissions").count({ total: "id" });
+
+    if (userId) {
+      query.where({ user_id: userId });
+      countQuery.where({ user_id: userId });
+    }
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
+  },
+);
+
+securityRouter.get(
+  "/user-permissions/:id",
+  requirePermission("users.read"),
+  async (ctx) => {
+    const row = await db("user_permissions")
+      .where({ id: ctx.params.id })
+      .first();
+    if (!row) {
+      ctx.throw(404, "permission not found");
+    }
+    ctx.body = row;
+  },
+);
+
+securityRouter.get(
+  "/financial-logs",
+  requirePermission("reports.financial"),
+  async (ctx) => {
+    const page = parsePositiveInt(ctx.query.page, 1);
+    const perPage = Math.min(parsePositiveInt(ctx.query.per_page, 20), 100);
+    const offset = (page - 1) * perPage;
+
+    const query = db("financial_logs").orderBy("created_at", "desc");
+    const countQuery = db("financial_logs").count({ total: "id" });
+
+    const [{ total = 0 } = { total: 0 }, rows] = await Promise.all([
+      countQuery,
+      query.limit(perPage).offset(offset),
+    ]);
+
+    ctx.body = {
+      data: rows,
+      pagination: {
+        page,
+        per_page: perPage,
+        total: Number(total || 0),
+      },
+    };
+  },
+);
+
+securityRouter.get(
+  "/financial-logs/:id",
+  requirePermission("reports.financial"),
+  async (ctx) => {
+    const row = await db("financial_logs").where({ id: ctx.params.id }).first();
+    if (!row) {
+      ctx.throw(404, "financial log not found");
+    }
+    ctx.body = row;
+  },
+);
+
 securityRouter.post(
   "/fines",
   requirePermission("orders.write"),

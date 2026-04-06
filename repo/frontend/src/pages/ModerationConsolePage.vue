@@ -154,11 +154,11 @@ onMounted(async () => {
           <span>Decision reason</span>
           <input v-model="decisionReasonById[post.id]" type="text" />
         </label>
-        <button class="secondary" :disabled="hasActionInProgress" @click="decidePost(post.id, 'accept')">
-          Accept
+        <button class="secondary" :disabled="hasActionInProgress || actionLock.postDecision" @click="decidePost(post.id, 'accept')">
+          {{ actionLock.postDecision ? "Accepting..." : "Accept" }}
         </button>
-        <button class="danger" :disabled="hasActionInProgress" @click="decidePost(post.id, 'reject')">
-          Reject
+        <button class="danger" :disabled="hasActionInProgress || actionLock.postDecision" @click="decidePost(post.id, 'reject')">
+          {{ actionLock.postDecision ? "Rejecting..." : "Reject" }}
         </button>
       </div>
     </div>
@@ -195,24 +195,24 @@ onMounted(async () => {
               <td>
                 <button
                   class="secondary"
-                  :disabled="hasActionInProgress"
+                  :disabled="hasActionInProgress || actionLock.reportDecision"
                   @click="decideReport(report.id, 'accept')"
                 >
-                  Accept
+                  {{ actionLock.reportDecision ? "Accepting..." : "Accept" }}
                 </button>
                 <button
                   class="secondary"
-                  :disabled="hasActionInProgress"
+                  :disabled="hasActionInProgress || actionLock.reportDecision"
                   @click="decideReport(report.id, 'reject')"
                 >
-                  Reject
+                  {{ actionLock.reportDecision ? "Rejecting..." : "Reject" }}
                 </button>
                 <button
                   class="danger"
-                  :disabled="hasActionInProgress"
+                  :disabled="hasActionInProgress || actionLock.reportDecision"
                   @click="decideReport(report.id, 'ban_user')"
                 >
-                  Ban
+                  {{ actionLock.reportDecision ? "Banning..." : "Ban" }}
                 </button>
               </td>
             </tr>

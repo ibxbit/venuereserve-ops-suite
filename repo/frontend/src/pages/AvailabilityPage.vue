@@ -197,14 +197,27 @@ async function addRequestedReservationToCheckout() {
       return;
     }
 
-    localStorage.setItem(
-      RESERVATION_DRAFT_KEY,
-      JSON.stringify({
-        user_id: form.value.user_id,
-        reservation_lines: [{ reservation_id: created.data.id }],
-      }),
-    );
-    notice.value = `Reservation ${created.data.id} created and added to checkout draft.`;
+    const rawDraft = localStorage.getItem(RESERVATION_DRAFT_KEY);
+    let draft = { user_id: form.value.user_id, reservation_lines: [] };
+    if (rawDraft) {
+      try {
+        const existing = JSON.parse(rawDraft);
+        if (existing.user_id === form.value.user_id) {
+          draft = existing;
+        }
+      } catch (e) {
+        console.warn("Invalid draft in localStorage, resetting.");
+      }
+    }
+
+    if (!Array.isArray(draft.reservation_lines)) {
+      draft.reservation_lines = [];
+    }
+
+    draft.reservation_lines.push({ reservation_id: created.data.id });
+
+    localStorage.setItem(RESERVATION_DRAFT_KEY, JSON.stringify(draft));
+    notice.value = `Reservation ${created.data.id} created and added to checkout draft (Total: ${draft.reservation_lines.length}).`;
   } catch (error) {
     errorMessage.value = getApiErrorMessage(
       error,
@@ -267,8 +280,8 @@ onMounted(async () => {
           />
         </label>
       </div>
-      <button :disabled="hasActionInProgress" type="submit">
-        {{ browseButtonLabel }}
+      <button :disabled="hasActionInProgress || actionLock.browse" type="submit">
+        {{ actionLock.browse ? "Browsing..." : browseButtonLabel }}
       </button>
     </form>
 
@@ -321,7 +334,7 @@ onMounted(async () => {
       <button
         v-if="requested && !requested.available"
         type="button"
-        :disabled="hasActionInProgress"
+        :disabled="hasActionInProgress || actionLock.exception"
         @click="requestException"
       >
         {{ actionLock.exception ? "Submitting exception..." : "Request manager exception" }}
@@ -329,7 +342,7 @@ onMounted(async () => {
       <button
         v-if="requested && requested.available"
         type="button"
-        :disabled="hasActionInProgress"
+        :disabled="hasActionInProgress || actionLock.addToCheckout"
         @click="addRequestedReservationToCheckout"
       >
         {{ actionLock.addToCheckout ? "Adding to checkout..." : "Add requested slot to checkout" }}
