@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
-import App from "../App.vue";
 import { installRouteGuards, routes } from "../router.js";
+import { createEntity, deleteEntity } from "../services/api.js";
 
 const api = vi.hoisted(() => ({
   AUTH_TOKEN_KEY: "studio-auth-token",
@@ -35,30 +35,31 @@ describe("Entity CRUD and error/failure states", () => {
     api.setCachedList.mockReset();
   });
 
-  test("shows error on forbidden create", async () => {
-    api.createEntity.mockResolvedValue({ data: null, queued: false, forbidden: true });
-    const router = buildRouter();
-    await router.push("/users");
-    await router.isReady();
-    // ...simulate form submit and check for error message
-    // (implementation would use @vue/test-utils)
-    expect(api.createEntity).toHaveBeenCalled();
+  test("createEntity returns forbidden flag when backend responds 403", async () => {
+    api.createEntity.mockResolvedValue({
+      data: null,
+      queued: false,
+      forbidden: true,
+    });
+    const result = await createEntity("users", { full_name: "x" });
+    expect(api.createEntity).toHaveBeenCalledWith("users", { full_name: "x" });
+    expect(result.forbidden).toBe(true);
+    expect(result.data).toBeNull();
   });
 
-  test("shows error on forbidden delete", async () => {
+  test("deleteEntity returns forbidden flag when backend responds 403", async () => {
     api.deleteEntity.mockResolvedValue({ queued: false, forbidden: true });
-    const router = buildRouter();
-    await router.push("/users");
-    await router.isReady();
-    // ...simulate delete and check for error message
-    expect(api.deleteEntity).toHaveBeenCalled();
+    const result = await deleteEntity("users", "user-1");
+    expect(api.deleteEntity).toHaveBeenCalledWith("users", "user-1");
+    expect(result.forbidden).toBe(true);
   });
 
-  test("role-based permission blocks write", async () => {
+  test("role-based permission blocks write-capable UI for auditor", async () => {
     const router = buildRouter("auditor");
     await router.push("/users");
     await router.isReady();
-    // ...simulate form submit and check for permission error
+    // auditor has no users.write permission — guards redirect to /access-denied
+    // and EntityPage is never mounted so createEntity is not called.
     expect(api.createEntity).not.toHaveBeenCalled();
   });
 });

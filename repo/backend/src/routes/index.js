@@ -393,10 +393,11 @@ apiRouter.get(
   "/reports/security",
   requirePermission("reports.security"),
   async (ctx) => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const recentActions = await db("audit_trails")
       .select("action")
       .count({ count: "id" })
-      .where("created_at", ">=", db.raw("DATE_SUB(NOW(), INTERVAL 30 DAY)"))
+      .where("created_at", ">=", thirtyDaysAgo)
       .groupBy("action");
 
     ctx.body = {
